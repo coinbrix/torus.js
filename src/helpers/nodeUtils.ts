@@ -39,6 +39,7 @@ export const GetPubKeyOrKeyAssign = async (params: {
   verifierId: string;
   extendedVerifierId?: string;
 }): Promise<KeyLookupResult> => {
+  const totalEndpoints = 3;
   const { endpoints, network, verifier, verifierId, extendedVerifierId } = params;
   const lookupPromises = endpoints.map((x) =>
     post<JRPCResponse<VerifierLookupResponse>>(
@@ -75,12 +76,12 @@ export const GetPubKeyOrKeyAssign = async (params: {
     });
     const errorResult = thresholdSame(
       lookupPubKeys.map((x2) => x2 && x2.error),
-      ~~(endpoints.length / 2) + 1
+      totalEndpoints
     );
 
     const keyResult = thresholdSame(
       lookupPubKeys.map((x3) => x3 && normalizeKeysResult(x3.result)),
-      ~~(endpoints.length / 2) + 1
+      totalEndpoints
     );
 
     // nonceResult must exist except for extendedVerifierId and legacy networks along with keyResult
@@ -165,15 +166,16 @@ export async function retrieveOrImportShare(params: {
   const pubKeyY = pubKey.slice(66);
   const tokenCommitment = keccak256(Buffer.from(idToken, "utf8"));
   let isImportShareReq = false;
+  const totalEndpoints = 3;
   if (importedShares && importedShares.length > 0) {
-    if (importedShares.length !== endpoints.length) {
+    if (importedShares.length < totalEndpoints) {
       throw new Error("Invalid imported shares length");
     }
     isImportShareReq = true;
   }
 
   // make commitment requests to endpoints
-  for (let i = 0; i < endpoints.length; i += 1) {
+  for (let i = 0; i < totalEndpoints; i += 1) {
     /*
       CommitmentRequestParams struct {
         MessagePrefix      string `json:"messageprefix"`
@@ -212,9 +214,9 @@ export async function retrieveOrImportShare(params: {
     });
 
     // we need to get commitments from all endpoints for importing share
-    if (importedShares.length > 0 && completedRequests.length === endpoints.length) {
+    if (importedShares.length > 0 && completedRequests.length === totalEndpoints) {
       return Promise.resolve(resultArr);
-    } else if (importedShares.length === 0 && completedRequests.length >= ~~((endpoints.length * 3) / 4) + 1) {
+    } else if (importedShares.length === 0 && completedRequests.length >= totalEndpoints) {
       const requiredNodeResult = completedRequests.find((resp: void | JRPCResponse<CommitmentRequestResult>) => {
         if (resp && resp.result?.nodeindex === "1") {
           return true;
@@ -242,7 +244,7 @@ export async function retrieveOrImportShare(params: {
         }
         if (x) nodeSigs.push((x as JRPCResponse<CommitmentRequestResult>).result);
       }
-      for (let i = 0; i < endpoints.length; i += 1) {
+      for (let i = 0; i < totalEndpoints; i += 1) {
         const x = responses[i];
         if (!x || typeof x !== "object") {
           continue;
@@ -332,7 +334,7 @@ export async function retrieveOrImportShare(params: {
           return undefined;
         });
 
-        const thresholdPublicKey = thresholdSame(pubkeys, ~~(endpoints.length / 2) + 1);
+        const thresholdPublicKey = thresholdSame(pubkeys, totalEndpoints);
 
         if (!thresholdPublicKey) {
           throw new Error("invalid result from nodes, threshold number of public key results are not matching");
@@ -346,7 +348,7 @@ export async function retrieveOrImportShare(params: {
           );
         }
 
-        const thresholdReqCount = importedShares.length > 0 ? endpoints.length : ~~(endpoints.length / 2) + 1;
+        const thresholdReqCount = totalEndpoints;
         // optimistically run lagrange interpolation once threshold number of shares have been received
         // this is matched against the user public key to ensure that shares are consistent
         // Note: no need of thresholdMetadataNonce for extended_verifier_id key
@@ -434,7 +436,7 @@ export async function retrieveOrImportShare(params: {
             return false;
           });
 
-          const minThresholdRequired = ~~(endpoints.length / 2) + 1;
+          const minThresholdRequired = totalEndpoints;
           if (!verifierParams.extended_verifier_id && validSigs.length < minThresholdRequired) {
             throw new Error(`Insufficient number of signatures from nodes, required: ${minThresholdRequired}, found: ${validSigs.length}`);
           }
@@ -470,7 +472,7 @@ export async function retrieveOrImportShare(params: {
             [] as { index: BN; value: BN }[]
           );
           // run lagrange interpolation on all subsets, faster in the optimistic scenario than berlekamp-welch due to early exit
-          const allCombis = kCombinations(decryptedShares.length, ~~(endpoints.length / 2) + 1);
+          const allCombis = kCombinations(decryptedShares.length, totalEndpoints);
 
           let privateKey: BN | null = null;
           for (let j = 0; j < allCombis.length; j += 1) {
@@ -495,7 +497,7 @@ export async function retrieveOrImportShare(params: {
           if (privateKey === undefined || privateKey === null) {
             throw new Error("could not derive private key");
           }
-          const thresholdIsNewKey = thresholdSame(isNewKeyResponses, ~~(endpoints.length / 2) + 1);
+          const thresholdIsNewKey = thresholdSame(isNewKeyResponses, totalEndpoints);
 
           return { privateKey, sessionTokenData, thresholdNonceData, nodeIndexes, isNewKey: thresholdIsNewKey === "true" };
         }
@@ -614,6 +616,7 @@ export async function retrieveOrImportShare(params: {
 }
 
 export const legacyKeyLookup = async (endpoints: string[], verifier: string, verifierId: string): Promise<LegacyKeyLookupResult> => {
+  const totalEndpoints = 3;
   const lookupPromises = endpoints.map((x) =>
     post<JRPCResponse<LegacyVerifierLookupResponse>>(
       x,
@@ -627,11 +630,11 @@ export const legacyKeyLookup = async (endpoints: string[], verifier: string, ver
     const lookupShares = lookupResults.filter((x1) => x1);
     const errorResult = thresholdSame(
       lookupShares.map((x2) => x2 && x2.error),
-      ~~(endpoints.length / 2) + 1
+      totalEndpoints
     );
     const keyResult = thresholdSame(
       lookupShares.map((x3) => x3 && x3.result),
-      ~~(endpoints.length / 2) + 1
+      totalEndpoints
     );
     if (keyResult || errorResult) {
       return Promise.resolve({ keyResult, errorResult });
@@ -651,15 +654,16 @@ export const legacyKeyAssign = async ({
   network,
   clientId,
 }: KeyAssignInput): Promise<void> => {
+  const totalEndpoints = 3;
   let nodeNum: number;
   let initialPoint: number | undefined;
   if (lastPoint === undefined) {
-    nodeNum = Math.floor(Math.random() * endpoints.length);
+    nodeNum = Math.floor(Math.random() * totalEndpoints);
     // nodeNum = endpoints.indexOf("https://torus-node.binancex.dev/jrpc");
     log.info("keyassign", nodeNum, endpoints[nodeNum]);
     initialPoint = nodeNum;
   } else {
-    nodeNum = lastPoint % endpoints.length;
+    nodeNum = lastPoint % totalEndpoints;
   }
   if (nodeNum === firstPoint) throw new Error("Looped through all");
   if (firstPoint !== undefined) initialPoint = firstPoint;
