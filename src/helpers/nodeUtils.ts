@@ -167,15 +167,19 @@ export async function retrieveOrImportShare(params: {
   const tokenCommitment = keccak256(Buffer.from(idToken, "utf8"));
   let isImportShareReq = false;
   const totalEndpoints = 3;
+  let commitmentEnpoints = totalEndpoints;
+  if (extraParams.runExtraCommitments) {
+    commitmentEnpoints = 5;
+  }
   if (importedShares && importedShares.length > 0) {
-    if (importedShares.length < totalEndpoints) {
+    if (importedShares.length < commitmentEnpoints) {
       throw new Error("Invalid imported shares length");
     }
     isImportShareReq = true;
   }
 
   // make commitment requests to endpoints
-  for (let i = 0; i < totalEndpoints; i += 1) {
+  for (let i = 0; i < commitmentEnpoints; i += 1) {
     /*
       CommitmentRequestParams struct {
         MessagePrefix      string `json:"messageprefix"`
@@ -212,11 +216,15 @@ export async function retrieveOrImportShare(params: {
       }
       return true;
     });
-
+    let completedEndpoints = commitmentEnpoints;
+    // eslint-disable-next-line eqeqeq
+    if (commitmentEnpoints != 3) {
+      completedEndpoints = ~~((commitmentEnpoints * 3) / 4) + 1;
+    }
     // we need to get commitments from all endpoints for importing share
     if (importedShares.length > 0 && completedRequests.length === totalEndpoints) {
       return Promise.resolve(resultArr);
-    } else if (importedShares.length === 0 && completedRequests.length >= totalEndpoints) {
+    } else if (importedShares.length === 0 && completedRequests.length >= completedEndpoints) {
       const requiredNodeResult = completedRequests.find((resp: void | JRPCResponse<CommitmentRequestResult>) => {
         if (resp && resp.result?.nodeindex === "1") {
           return true;
