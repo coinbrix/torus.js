@@ -166,20 +166,23 @@ export async function retrieveOrImportShare(params: {
   const pubKeyY = pubKey.slice(66);
   const tokenCommitment = keccak256(Buffer.from(idToken, "utf8"));
   let isImportShareReq = false;
-  const totalEndpoints = 3;
-  let commitmentEnpoints = totalEndpoints;
-  if (extraParams.runExtraCommitments) {
-    commitmentEnpoints = 5;
+  let totalEndpoints = endpoints.length;
+  let thresholdValue = ~~(endpoints.length / 2) + 1;
+  if (extraParams.callFor3Commitment) {
+    totalEndpoints = 3;
+    thresholdValue = totalEndpoints;
   }
+
   if (importedShares && importedShares.length > 0) {
-    if (importedShares.length < commitmentEnpoints) {
+    if (importedShares.length !== totalEndpoints) {
       throw new Error("Invalid imported shares length");
     }
     isImportShareReq = true;
   }
 
   // make commitment requests to endpoints
-  for (let i = 0; i < commitmentEnpoints; i += 1) {
+
+  for (let i = 0; i < totalEndpoints; i += 1) {
     /*
       CommitmentRequestParams struct {
         MessagePrefix      string `json:"messageprefix"`
@@ -187,7 +190,7 @@ export async function retrieveOrImportShare(params: {
         TempPubX           string `json:"temppubx"`
         TempPubY           string `json:"temppuby"`
         VerifierIdentifier string `json:"verifieridentifier"`
-      } 
+      }
       */
     const p = post<JRPCResponse<CommitmentRequestResult>>(
       endpoints[i],
@@ -216,15 +219,10 @@ export async function retrieveOrImportShare(params: {
       }
       return true;
     });
-    let completedEndpoints = commitmentEnpoints;
-    // eslint-disable-next-line eqeqeq
-    if (commitmentEnpoints != 3) {
-      completedEndpoints = ~~((commitmentEnpoints * 3) / 4) + 1;
-    }
     // we need to get commitments from all endpoints for importing share
     if (importedShares.length > 0 && completedRequests.length === totalEndpoints) {
       return Promise.resolve(resultArr);
-    } else if (importedShares.length === 0 && completedRequests.length >= completedEndpoints) {
+    } else if (importedShares.length === 0 && completedRequests.length >= ~~((totalEndpoints * 3) / 4) + 1) {
       const requiredNodeResult = completedRequests.find((resp: void | JRPCResponse<CommitmentRequestResult>) => {
         if (resp && resp.result?.nodeindex === "1") {
           return true;
@@ -341,8 +339,7 @@ export async function retrieveOrImportShare(params: {
           }
           return undefined;
         });
-
-        const thresholdPublicKey = thresholdSame(pubkeys, totalEndpoints);
+        const thresholdPublicKey = thresholdSame(pubkeys, thresholdValue);
 
         if (!thresholdPublicKey) {
           throw new Error("invalid result from nodes, threshold number of public key results are not matching");
@@ -356,7 +353,7 @@ export async function retrieveOrImportShare(params: {
           );
         }
 
-        const thresholdReqCount = totalEndpoints;
+        const thresholdReqCount = importedShares.length > 0 ? totalEndpoints : thresholdValue;
         // optimistically run lagrange interpolation once threshold number of shares have been received
         // this is matched against the user public key to ensure that shares are consistent
         // Note: no need of thresholdMetadataNonce for extended_verifier_id key
@@ -444,7 +441,11 @@ export async function retrieveOrImportShare(params: {
             return false;
           });
 
-          const minThresholdRequired = totalEndpoints;
+          let minThresholdRequired = ~~(totalEndpoints / 2) + 1;
+          if (extraParams.callFor3Commitment) {
+            minThresholdRequired = totalEndpoints;
+          }
+
           if (!verifierParams.extended_verifier_id && validSigs.length < minThresholdRequired) {
             throw new Error(`Insufficient number of signatures from nodes, required: ${minThresholdRequired}, found: ${validSigs.length}`);
           }
@@ -480,7 +481,12 @@ export async function retrieveOrImportShare(params: {
             [] as { index: BN; value: BN }[]
           );
           // run lagrange interpolation on all subsets, faster in the optimistic scenario than berlekamp-welch due to early exit
-          const allCombis = kCombinations(decryptedShares.length, totalEndpoints);
+
+          let totalCombinationSubSpace = ~~(totalEndpoints / 2) + 1;
+          if (extraParams.callFor3Commitment) {
+            totalCombinationSubSpace = totalEndpoints;
+          }
+          const allCombis = kCombinations(decryptedShares.length, totalCombinationSubSpace);
 
           let privateKey: BN | null = null;
           for (let j = 0; j < allCombis.length; j += 1) {
@@ -505,7 +511,8 @@ export async function retrieveOrImportShare(params: {
           if (privateKey === undefined || privateKey === null) {
             throw new Error("could not derive private key");
           }
-          const thresholdIsNewKey = thresholdSame(isNewKeyResponses, totalEndpoints);
+
+          const thresholdIsNewKey = thresholdSame(isNewKeyResponses, thresholdValue);
 
           return { privateKey, sessionTokenData, thresholdNonceData, nodeIndexes, isNewKey: thresholdIsNewKey === "true" };
         }
@@ -624,7 +631,6 @@ export async function retrieveOrImportShare(params: {
 }
 
 export const legacyKeyLookup = async (endpoints: string[], verifier: string, verifierId: string): Promise<LegacyKeyLookupResult> => {
-  const totalEndpoints = 3;
   const lookupPromises = endpoints.map((x) =>
     post<JRPCResponse<LegacyVerifierLookupResponse>>(
       x,
@@ -635,14 +641,16 @@ export const legacyKeyLookup = async (endpoints: string[], verifier: string, ver
     ).catch((err) => log.error("lookup request failed", err))
   );
   return Some<void | JRPCResponse<LegacyVerifierLookupResponse>, LegacyKeyLookupResult>(lookupPromises, (lookupResults) => {
+    let minThreshold = 3;
+    minThreshold = Math.max(minThreshold, ~~(endpoints.length / 2) + 1);
     const lookupShares = lookupResults.filter((x1) => x1);
     const errorResult = thresholdSame(
       lookupShares.map((x2) => x2 && x2.error),
-      totalEndpoints
+      minThreshold
     );
     const keyResult = thresholdSame(
       lookupShares.map((x3) => x3 && x3.result),
-      totalEndpoints
+      minThreshold
     );
     if (keyResult || errorResult) {
       return Promise.resolve({ keyResult, errorResult });
